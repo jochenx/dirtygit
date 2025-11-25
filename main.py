@@ -57,7 +57,7 @@ class BranchSelectorUI:
     def __init__(self, repo_path: str, quit_on_switch: bool = True) -> None:
         self.repo_path = repo_path
         self.quit_on_switch = quit_on_switch
-        self.log_dir = Path(self.repo_path) / "logs"
+        self.log_dir = Path.home() / ".lazygit_logging"
         self.log_dir.mkdir(exist_ok=True, parents=True)
         self.log_file = self.log_dir / "branch_selector.log"
         self.branches: List[Branch] = list_branches(repo_path)
