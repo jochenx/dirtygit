@@ -67,6 +67,7 @@ class BranchSelectorUI:
         self.status: str = (
             "↑/↓ to move • Enter to switch • Delete to delete • Ctrl-C/Esc to quit"
         )
+        self.awaiting_force_branch: Optional[str] = None
 
         self.log_area = TextArea(
             text="",
@@ -158,6 +159,7 @@ class BranchSelectorUI:
         is_input_focused = Condition(
             lambda: get_app().layout.has_focus(self.input_area)
         )
+        is_force_prompt = Condition(lambda: self.awaiting_force_branch is not None)
 
         @kb.add("c-c")
         @kb.add("escape")
@@ -198,7 +200,7 @@ class BranchSelectorUI:
                 ["git", "branch", "-d", branch],
                 on_success=self._refresh_branches,
                 refresh=True,
-                on_failure=lambda: self._prompt_force_delete(branch),
+                on_failure=lambda: self._start_force_prompt(branch),
             )
 
         @kb.add("enter", filter=is_input_focused)
@@ -209,6 +211,30 @@ class BranchSelectorUI:
                 return
             self.app.create_background_task(self._send_to_proc(text))
             self._append_log(f"> {text}")
+
+        @kb.add("y", filter=is_force_prompt)
+        def _(event) -> None:
+            branch = self.awaiting_force_branch
+            if not branch:
+                return
+            self.awaiting_force_branch = None
+            self._append_log(f"Force deleting {branch}")
+            self._run_git(
+                ["git", "branch", "-D", branch],
+                on_success=self._refresh_branches,
+                refresh=True,
+            )
+
+        @kb.add("n", filter=is_force_prompt)
+        @kb.add("enter", filter=is_force_prompt)
+        def _(event) -> None:
+            if not self.awaiting_force_branch:
+                return
+            self.awaiting_force_branch = None
+            self.status = (
+                "Force delete canceled. ↑/↓ to move • Enter to switch • Delete to delete"
+            )
+            self.app.invalidate()
 
     def _refresh_branches(self) -> None:
         old_name = self.branches[self.selected][0] if self.branches else None
@@ -259,7 +285,12 @@ class BranchSelectorUI:
 
         self.app.layout.focus(self.input_area)
         self.app.create_background_task(
-            self._run_git_async(args, on_success=on_success, refresh=refresh)
+            self._run_git_async(
+                args,
+                on_success=on_success,
+                on_failure=on_failure,
+                refresh=refresh,
+            )
         )
 
     async def _run_git_async(
@@ -326,40 +357,11 @@ class BranchSelectorUI:
         except Exception:
             pass
 
-    def _prompt_force_delete(self, branch: str) -> None:
-        """Prompt for force delete and act if confirmed."""
-        self.status = "Delete failed. FORCE? y/N"
+    def _start_force_prompt(self, branch: str) -> None:
+        """Enter force-delete prompt mode."""
+        self.awaiting_force_branch = branch
+        self.status = f"Delete failed. FORCE delete {branch}? y/N"
         self.app.invalidate()
-
-        async def wait_for_answer() -> None:
-            # Temporarily focus input for the prompt.
-            self.app.layout.focus(self.input_area)
-            while True:
-                # Read the current buffer and reset after Enter.
-                await asyncio.sleep(0.05)
-                buffer_text = self.input_area.text.strip().lower()
-                if buffer_text not in {"y", "n", ""}:
-                    continue
-                if buffer_text in {"", "n"}:
-                    # Declined; reset prompt and refocus list.
-                    self.input_area.buffer.reset()
-                    self.status = (
-                        "Canceled. ↑/↓ to move • Enter to switch • Delete to delete"
-                    )
-                    self.app.layout.focus(self.list_window)
-                    self.app.invalidate()
-                    return
-                if buffer_text == "y":
-                    self.input_area.buffer.reset()
-                    self._append_log(f"Force deleting {branch}")
-                    self._run_git(
-                        ["git", "branch", "-D", branch],
-                        on_success=self._refresh_branches,
-                        refresh=True,
-                    )
-                    return
-
-        self.app.create_background_task(wait_for_answer())
 
     def run(self) -> None:
         if not self.branches:
